@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>KeyScope — Live Keylogger</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg:       #080810;
+    --surface:  #0f0f1a;
+    --card:     #13131f;
+    --border:   #1e1e32;
+    --violet:   #7b68ee;
+    --violet2:  #a78bfa;
+    --cyan:     #22d3ee;
+    --green:    #34d399;
+    --orange:   #fb923c;
+    --red:      #f87171;
+    --text:     #e2e2f0;
+    --muted:    #52526e;
+    --mono:     'JetBrains Mono', monospace;
+    --sans:     'Inter', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── scanline overlay ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px, transparent 3px,
+      rgba(0,0,0,0.08) 3px, rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  /* ── Top Nav ── */
+  nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 28px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(8,8,16,0.95);
+    backdrop-filter: blur(12px);
+    position: sticky; top: 0; z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--violet2);
+    letter-spacing: -0.5px;
+  }
+  .logo span { color: var(--cyan); }
+
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  .status-dot.on {
+    background: var(--green);
+    box-shadow: 0 0 0 4px rgba(52,211,153,0.2);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 4px rgba(52,211,153,0.2); }
+    50%      { box-shadow: 0 0 0 8px rgba(52,211,153,0.05); }
+  }
+
+  .status-text {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: color 0.3s;
+  }
+  .status-text.on { color: var(--green); }
+
+  .clock {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin-left: 8px;
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 18px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .btn-start  { background: var(--green);  color: #041d14; }
+  .btn-start:hover  { filter: brightness(1.1); transform: translateY(-1px); }
+  .btn-stop   { background: var(--red);    color: #1a0a0a; }
+  .btn-stop:hover   { filter: brightness(1.1); transform: translateY(-1px); }
+  .btn-ghost  { background: var(--card);   color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover  { color: var(--text); border-color: var(--violet); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none !important; }
+
+  /* ── Main layout ── */
+  .main { padding: 20px 28px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* ── Stat Cards ── */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px;
+  }
+  @media(max-width:900px) { .cards { grid-template-columns: repeat(3,1fr); } }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: var(--violet); }
+  .card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--violet), var(--cyan));
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .card:hover::before { opacity: 1; }
+
+  .card-val {
+    font-family: var(--mono);
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+    letter-spacing: -1px;
+  }
+  .card-label {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+  }
+  .card-accent { color: var(--violet2); }
+
+  /* ── Two column layout ── */
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .row3 { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+  @media(max-width:900px) { .row2,.row3 { grid-template-columns:1fr; } }
+
+  /* ── Panel ── */
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .panel-head .dot { width:6px;height:6px;border-radius:50%;margin-right:8px; }
+  .panel-body { padding: 14px 18px; }
+
+  /* ── Live feed ── */
+  #feed {
+    height: 320px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  #feed::-webkit-scrollbar { width: 4px; }
+  #feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .feed-row {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(30,30,50,0.4);
+    animation: fadeIn 0.2s ease;
+  }
+  @keyframes fadeIn { from { opacity:0; transform:translateX(-6px); } to { opacity:1; transform:none; } }
+
+  .feed-n    { color: var(--muted); min-width: 40px; text-align: right; font-size:10px; }
+  .feed-ts   { color: #3a3a5c; font-size: 10px; min-width: 90px; }
+  .feed-key  { color: var(--green); font-weight: 600; }
+  .feed-key.special { color: var(--orange); }
+  .feed-key.space   { color: var(--cyan); }
+
+  /* ── Charts ── */
+  .chart-wrap { position: relative; }
+
+  /* ── Frequency bars ── */
+  .freq-list { display: flex; flex-direction: column; gap: 6px; max-height:340px; overflow-y:auto;
+    scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+  .freq-row { display:flex; align-items:center; gap:10px; }
+  .freq-key {
+    font-family: var(--mono); font-size:11px; font-weight:700;
+    color: var(--violet2); min-width: 52px; text-align:center;
+    background: rgba(123,104,238,0.1); border-radius:4px;
+    padding: 2px 4px;
+  }
+  .freq-bar-wrap { flex:1; height:14px; background:rgba(255,255,255,0.04); border-radius:4px; overflow:hidden; }
+  .freq-bar { height:100%; border-radius:4px; transition: width 0.4s ease;
+    background: linear-gradient(90deg, var(--violet), var(--cyan)); }
+  .freq-count { font-family:var(--mono); font-size:10px; color:var(--muted); min-width:36px; text-align:right; }
+  .freq-pct   { font-family:var(--mono); font-size:10px; color:var(--muted); min-width:38px; text-align:right; }
+
+  /* ── Keyboard Heatmap ── */
+  #heatmap { padding: 10px 0; }
+  .kb-row { display:flex; justify-content:center; gap:5px; margin-bottom:5px; }
+  .kb-key {
+    width: 38px; height: 36px;
+    border-radius: 5px;
+    border: 1px solid #1e1e38;
+    display: flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    font-family: var(--mono); font-size: 10px; font-weight:700;
+    color: #444466;
+    transition: all 0.3s;
+    position: relative;
+    background: #0d0d1e;
+    cursor: default;
+  }
+  .kb-key .kb-char { font-size: 11px; }
+  .kb-key .kb-count { font-size: 8px; color: #33334f; margin-top:1px; }
+  .kb-space {
+    width: 160px; height: 32px;
+    border-radius: 5px;
+    border: 1px solid #1e1e38;
+    display:flex; align-items:center; justify-content:center;
+    font-family: var(--mono); font-size:10px; font-weight:700;
+    color: #444466;
+    background: #0d0d1e;
+    transition: all 0.3s;
+    cursor: default;
+  }
+
+  /* ── Timeline chart area ── */
+  #timelineChart { max-height: 100px; }
+  #freqChart     { max-height: 260px; }
+  #specChart     { max-height: 220px; }
+
+  /* ── Scrollbar global ── */
+  ::-webkit-scrollbar { width:4px; height:4px; }
+  ::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
+
+  .empty-state {
+    text-align:center; color:var(--muted);
+    font-family:var(--mono); font-size:12px;
+    padding:30px 0;
+  }
+  .empty-state span { font-size:28px; display:block; margin-bottom:10px; opacity:0.3; }
+</style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <div class="logo">⌨ Key<span>Scope</span></div>
+  <div class="nav-right">
+    <div class="status-dot" id="statusDot"></div>
+    <span class="status-text" id="statusText">IDLE</span>
+    <span class="clock" id="clock"></span>
+    <button class="btn btn-start" id="btnStart" onclick="startLog()">▶ Start</button>
+    <button class="btn btn-stop"  id="btnStop"  onclick="stopLog()" disabled>■ Stop</button>
+    <button class="btn btn-ghost" onclick="resetLog()">↺ Reset</button>
+    <button class="btn btn-ghost" onclick="exportData()">↓ Export</button>
+  </div>
+</nav>
+
+<!-- Main -->
+<div class="main">
+
+  <!-- Stat Cards -->
+  <div class="cards">
+    <div class="card"><div class="card-val card-accent" id="cTotal">0</div><div class="card-label">Total Keys</div></div>
+    <div class="card"><div class="card-val" id="cUnique">0</div><div class="card-label">Unique Keys</div></div>
+    <div class="card"><div class="card-val" id="cKpm">0</div><div class="card-label">Keys / Min</div></div>
+    <div class="card"><div class="card-val" id="cWords">0</div><div class="card-label">Words Typed</div></div>
+    <div class="card"><div class="card-val" id="cSession">00:00:00</div><div class="card-label">Session Time</div></div>
+    <div class="card"><div class="card-val card-accent" id="cTop">—</div><div class="card-label">Top Key</div></div>
+  </div>
+
+  <!-- Timeline -->
+  <div class="panel">
+    <div class="panel-head">
+      <div style="display:flex;align-items:center">
+        <div class="dot" style="background:var(--cyan)"></div>
+        Keystroke Timeline — last 60 seconds
+      </div>
+      <span id="kpmBadge" style="color:var(--cyan);font-size:12px"></span>
+    </div>
+    <div class="panel-body">
+      <div class="chart-wrap"><canvas id="timelineChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Row: Feed + Frequency -->
+  <div class="row2">
+
+    <!-- Live Feed -->
+    <div class="panel">
+      <div class="panel-head">
+        <div style="display:flex;align-items:center">
+          <div class="dot" style="background:var(--green)"></div>
+          Live Feed
+        </div>
+        <span style="font-size:11px;color:var(--violet2)" id="feedCount"></span>
+      </div>
+      <div class="panel-body" style="padding:10px 14px">
+        <div id="feed">
+          <div class="empty-state"><span>⌨</span>Press Start to begin recording</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Frequency Bars -->
+    <div class="panel">
+      <div class="panel-head">
+        <div style="display:flex;align-items:center">
+          <div class="dot" style="background:var(--violet)"></div>
+          Top 20 Keys
+        </div>
+      </div>
+      <div class="panel-body" style="padding:12px 14px">
+        <div class="freq-list" id="freqList">
+          <div class="empty-state"><span>📊</span>No data yet</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Row: Charts -->
+  <div class="row2">
+
+    <!-- Histogram: char freq -->
+    <div class="panel">
+      <div class="panel-head">
+        <div style="display:flex;align-items:center">
+          <div class="dot" style="background:var(--violet2)"></div>
+          Character Frequency Histogram
+        </div>
+      </div>
+      <div class="panel-body">
+        <canvas id="freqChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Special Keys Chart -->
+    <div class="panel">
+      <div class="panel-head">
+        <div style="display:flex;align-items:center">
+          <div class="dot" style="background:var(--orange)"></div>
+          Special Keys
+        </div>
+      </div>
+      <div class="panel-body">
+        <canvas id="specChart"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Keyboard Heatmap -->
+  <div class="panel">
+    <div class="panel-head">
+      <div style="display:flex;align-items:center">
+        <div class="dot" style="background:var(--green)"></div>
+        Keyboard Heatmap
+      </div>
+      <span style="font-size:10px;color:var(--muted)">brighter = more presses</span>
+    </div>
+    <div class="panel-body" id="heatmap"></div>
+  </div>
+
+</div><!-- /main -->
+
+<script>
+// ─── Chart.js defaults ────────────────────────────────────────────────────────
+Chart.defaults.color = '#52526e';
+Chart.defaults.borderColor = '#1e1e32';
+Chart.defaults.font.family = "'JetBrains Mono', monospace";
+Chart.defaults.font.size = 11;
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let running = false;
+let feedEntries = [];
+const MAX_FEED = 200;
+
+// ─── Timeline Chart ───────────────────────────────────────────────────────────
+const tlCtx = document.getElementById('timelineChart').getContext('2d');
+const tlChart = new Chart(tlCtx, {
+  type: 'bar',
+  data: {
+    labels: Array.from({length:60}, (_,i) => i===0?'now':(i===59?'-60s':'')),
+    datasets: [{
+      data: Array(60).fill(0),
+      backgroundColor: (ctx) => {
+        const v = ctx.raw / (Math.max(...ctx.chart.data.datasets[0].data)||1);
+        const r = Math.round(34 + v*(123-34));
+        const g = Math.round(211 + v*(104-211));
+        const b = Math.round(153 + v*(238-153));
+        return `rgba(${r},${g},${b},0.85)`;
+      },
+      borderWidth: 0,
+      borderRadius: 3,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: true,
+    animation: { duration: 300 },
+    plugins: { legend:{display:false}, tooltip:{
+      callbacks:{ label: c => `${c.raw} keys` }
+    }},
+    scales: {
+      x:{ grid:{display:false}, ticks:{maxTicksLimit:6} },
+      y:{ grid:{color:'#1e1e32'}, ticks:{stepSize:1}, beginAtZero:true }
+    }
+  }
+});
+
+// ─── Freq Histogram Chart ─────────────────────────────────────────────────────
+const fqCtx = document.getElementById('freqChart').getContext('2d');
+const fqChart = new Chart(fqCtx, {
+  type: 'bar',
+  data: { labels:[], datasets:[{
+    label:'Count', data:[],
+    backgroundColor: 'rgba(123,104,238,0.7)',
+    borderColor: '#a78bfa',
+    borderWidth: 1, borderRadius: 4,
+  }]},
+  options:{
+    responsive:true, maintainAspectRatio:true,
+    animation:{duration:400},
+    plugins:{legend:{display:false}},
+    scales:{
+      x:{grid:{display:false}},
+      y:{grid:{color:'#1e1e32'}, beginAtZero:true}
+    }
+  }
+});
+
+// ─── Special Keys Chart ───────────────────────────────────────────────────────
+const spCtx = document.getElementById('specChart').getContext('2d');
+const spChart = new Chart(spCtx, {
+  type: 'bar',
+  data: { labels:[], datasets:[{
+    label:'Count', data:[],
+    backgroundColor: 'rgba(251,146,60,0.7)',
+    borderColor: '#fb923c',
+    borderWidth: 1, borderRadius: 4,
+    indexAxis: 'y',
+  }]},
+  options:{
+    indexAxis:'y',
+    responsive:true, maintainAspectRatio:true,
+    animation:{duration:400},
+    plugins:{legend:{display:false}},
+    scales:{
+      x:{grid:{color:'#1e1e32'}, beginAtZero:true},
+      y:{grid:{display:false}}
+    }
+  }
+});
+
+// ─── Keyboard Layout ──────────────────────────────────────────────────────────
+const KB_ROWS = [
+  ['`','1','2','3','4','5','6','7','8','9','0','-','='],
+  ['q','w','e','r','t','y','u','i','o','p','[',']','\\'],
+  ['a','s','d','f','g','h','j','k','l',';',"'"],
+  ['z','x','c','v','b','n','m',',','.','/'],
+];
+
+function lerp(a,b,t){ return Math.round(a+(b-a)*t); }
+function keyColor(t){
+  if(t===0) return { bg:'#0d0d1e', text:'#333355', count:'#22223a' };
+  const r=lerp(13,160,t), g=lerp(13,100,t), b=lerp(30,255,t);
+  return { bg:`rgb(${r},${g},${b})`, text: t>0.4?'#fff':'#aaaacc', count: t>0.3?'#eee':'#555577' };
+}
+
+function buildHeatmap(charMap){
+  const hm = document.getElementById('heatmap');
+  const maxCount = Math.max(...Object.values(charMap), 1);
+  let html = '';
+  for(const row of KB_ROWS){
+    html += '<div class="kb-row">';
+    for(const k of row){
+      const cnt = charMap[k]||0;
+      const t   = cnt/maxCount;
+      const col = keyColor(t);
+      html += `<div class="kb-key" style="background:${col.bg};color:${col.text};border-color:${t>0?col.bg:'#1e1e38'}">
+        <span class="kb-char">${k.toUpperCase()}</span>
+        <span class="kb-count" style="color:${col.count}">${cnt||''}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+  // Space
+  const sp = charMap[' ']||0; const t=sp/maxCount;
+  const col=keyColor(t);
+  html += `<div class="kb-row"><div class="kb-space" style="background:${col.bg};color:${col.text}">
+    SPACE ${sp?`<span style="margin-left:8px;font-size:9px;opacity:0.8">${sp}</span>`:''}
+  </div></div>`;
+  hm.innerHTML = html;
+}
+
+// ─── Feed ─────────────────────────────────────────────────────────────────────
+function appendFeed(entry){
+  const feed = document.getElementById('feed');
+  // clear empty state
+  const empty = feed.querySelector('.empty-state');
+  if(empty) empty.remove();
+
+  let cls = 'feed-key';
+  if(entry.kind==='special') cls += ' special';
+  if(entry.key==='SPACE') cls += ' space';
+
+  const row = document.createElement('div');
+  row.className = 'feed-row';
+  row.innerHTML = `
+    <span class="feed-n">#${entry.n}</span>
+    <span class="feed-ts">${entry.ts}</span>
+    <span class="${cls}">${entry.key}</span>`;
+  feed.appendChild(row);
+  feed.scrollTop = feed.scrollHeight;
+  feedEntries.push(entry);
+  if(feedEntries.length > MAX_FEED){
+    feedEntries.shift();
+    if(feed.firstChild) feed.removeChild(feed.firstChild);
+  }
+  document.getElementById('feedCount').textContent = `#${entry.n}`;
+}
+
+// ─── Stats update ─────────────────────────────────────────────────────────────
+function updateStats(d){
+  document.getElementById('cTotal').textContent   = d.total.toLocaleString();
+  document.getElementById('cUnique').textContent  = d.unique;
+  document.getElementById('cKpm').textContent     = d.kpm;
+  document.getElementById('cWords').textContent   = d.words.toLocaleString();
+  document.getElementById('cSession').textContent = d.session;
+  document.getElementById('cTop').textContent     = d.top_key;
+  document.getElementById('kpmBadge').textContent = `${d.kpm} keys/min`;
+
+  // Timeline
+  tlChart.data.datasets[0].data = d.buckets;
+  tlChart.update('none');
+
+  // Freq list
+  const total = d.freq.reduce((s,r)=>s+r.count,0)||1;
+  const freqList = document.getElementById('freqList');
+  if(d.freq.length===0){
+    freqList.innerHTML = '<div class="empty-state"><span>📊</span>No data yet</div>';
+  } else {
+    freqList.innerHTML = d.freq.slice(0,20).map(r=>{
+      const pct = (r.count/total*100).toFixed(1);
+      const w   = (r.count/d.freq[0].count*100).toFixed(1);
+      return `<div class="freq-row">
+        <span class="freq-key">${r.key}</span>
+        <div class="freq-bar-wrap"><div class="freq-bar" style="width:${w}%"></div></div>
+        <span class="freq-count">${r.count}</span>
+        <span class="freq-pct">${pct}%</span>
+      </div>`;
+    }).join('');
+  }
+
+  // Freq chart
+  fqChart.data.labels   = d.freq.slice(0,20).map(r=>r.key);
+  fqChart.data.datasets[0].data = d.freq.slice(0,20).map(r=>r.count);
+  fqChart.update('none');
+
+  // Special chart
+  spChart.data.labels   = d.spec.map(r=>r.key);
+  spChart.data.datasets[0].data = d.spec.map(r=>r.count);
+  spChart.update('none');
+
+  // Heatmap
+  const charMap = {};
+  d.freq.forEach(r=>{ if(r.key.length===1) charMap[r.key.toLowerCase()]=r.count; });
+  buildHeatmap(charMap);
+}
+
+// ─── SSE ──────────────────────────────────────────────────────────────────────
+let es = null;
+function connectSSE(){
+  es = new EventSource('/stream');
+  es.addEventListener('key', e=>{
+    const entry = JSON.parse(e.data);
+    appendFeed(entry);
+  });
+  es.addEventListener('status', e=>{
+    const d = JSON.parse(e.data);
+    setRunning(d.running);
+    if(d.reset) resetUI();
+  });
+  es.onerror = ()=>{ setTimeout(connectSSE, 2000); };
+}
+connectSSE();
+
+// ─── Polling (fallback stats refresh) ────────────────────────────────────────
+setInterval(()=>{
+  if(!running) return;
+  fetch('/api/stats').then(r=>r.json()).then(updateStats);
+}, 1500);
+
+// ─── Controls ─────────────────────────────────────────────────────────────────
+function setRunning(val){
+  running = val;
+  document.getElementById('statusDot').className  = 'status-dot' + (val?' on':'');
+  document.getElementById('statusText').className = 'status-text' + (val?' on':'');
+  document.getElementById('statusText').textContent = val ? 'RECORDING' : 'STOPPED';
+  document.getElementById('btnStart').disabled = val;
+  document.getElementById('btnStop').disabled  = !val;
+}
+
+function resetUI(){
+  feedEntries = [];
+  document.getElementById('feed').innerHTML =
+    '<div class="empty-state"><span>⌨</span>Press Start to begin recording</div>';
+  document.getElementById('feedCount').textContent = '';
+  ['cTotal','cUnique','cKpm','cWords'].forEach(id=>document.getElementById(id).textContent='0');
+  document.getElementById('cSession').textContent='00:00:00';
+  document.getElementById('cTop').textContent='—';
+  document.getElementById('freqList').innerHTML='<div class="empty-state"><span>📊</span>No data yet</div>';
+  tlChart.data.datasets[0].data=Array(60).fill(0); tlChart.update('none');
+  fqChart.data.labels=[]; fqChart.data.datasets[0].data=[]; fqChart.update('none');
+  spChart.data.labels=[]; spChart.data.datasets[0].data=[]; spChart.update('none');
+  buildHeatmap({});
+}
+
+function startLog(){
+  fetch('/api/start',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok) setRunning(true);
+  });
+}
+function stopLog(){
+  fetch('/api/stop',{method:'POST'}).then(()=>setRunning(false));
+}
+function resetLog(){
+  if(!confirm('Sab data clear karna chahte ho?')) return;
+  fetch('/api/reset',{method:'POST'}).then(()=>{ setRunning(false); resetUI(); });
+}
+function exportData(){
+  window.location='/api/export';
+}
+
+// ─── Clock ────────────────────────────────────────────────────────────────────
+function tick(){
+  const n=new Date();
+  document.getElementById('clock').textContent =
+    n.toTimeString().slice(0,8);
+}
+tick(); setInterval(tick,1000);
+
+// init heatmap
+buildHeatmap({});
+</script>
+</body>
+</html>
